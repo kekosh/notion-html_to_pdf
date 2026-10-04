@@ -148,7 +148,7 @@ module NotionToPdf
     end
   end
 
-  def convert(input_path, output_pdf: nil, include_toc: false, margin: true, open_toggles: true, chrome_path: nil, auto_open: false)
+  def convert(input_path, output_pdf: nil, include_toc: false, margin: true, open_toggles: true, show_subpage_covers: false, chrome_path: nil, auto_open: false)
     input_path = clean_terminal_path(input_path)
     raise "指定されたファイルまたはフォルダが存在しません: #{input_path}" unless File.exist?(input_path)
 
@@ -285,6 +285,7 @@ module NotionToPdf
 
       margin_desc = (margin_css == '0') ? 'なし (0mm)' : margin_css
       puts "📐 余白設定: #{margin_desc}"
+      puts "🖼️  サブページヘッダ画像: #{show_subpage_covers ? '表示' : '非表示 (デフォルト)'}"
 
       # PDF印刷用最適化CSS
       print_opt_css = <<~CSS
@@ -342,9 +343,10 @@ module NotionToPdf
           }
           img.page-cover-image {
             width: 100% !important;
-            height: 30vh !important;
+            height: auto !important;
             max-height: 30vh !important;
-            object-fit: cover !important;
+            object-fit: contain !important;
+            object-position: center !important;
           }
           .page-header-icon img, img.icon {
             max-width: none !important;
@@ -375,6 +377,19 @@ module NotionToPdf
           white-space: pre-wrap;
         }
         .page-cover-image {
+          margin-top: 0 !important;
+          padding-top: 0 !important;
+        }
+        .notion-page-container.subpage.no-cover .page-cover-image,
+        .notion-page-container.subpage.no-cover img.page-cover-image {
+          display: none !important;
+        }
+        .notion-page-container.subpage.no-cover .page-header-icon-with-cover,
+        .notion-page-container.subpage.no-cover .page-header-icon {
+          margin-top: 0 !important;
+          top: 0 !important;
+        }
+        .notion-page-container.subpage.no-cover header {
           margin-top: 0 !important;
           padding-top: 0 !important;
         }
@@ -453,10 +468,20 @@ module NotionToPdf
       ordered_pages.each do |p|
         content = p[:raw_content]
         page_dir = File.dirname(p[:path])
+        is_subpage = p[:depth] > 0
+        hide_cover = is_subpage && !show_subpage_covers
 
         if HAVE_NOKOGIRI
           doc = Nokogiri::HTML.fragment(content)
           article = doc.at_css('article') || doc.at_css('body') || doc
+
+          # サブページのヘッダ画像を除去
+          if hide_cover
+            article.css('img.page-cover-image, .page-cover-image').remove
+            article.css('.page-header-icon-with-cover').each do |el|
+              el['class'] = el['class'].gsub(/\bpage-header-icon-with-cover\b/, '').strip
+            end
+          end
 
           # トグルを展開
           if open_toggles
@@ -522,6 +547,12 @@ module NotionToPdf
                         content
                       end
 
+          # サブページのヘッダ画像を除去
+          if hide_cover
+            body_html = body_html.gsub(%r{<img\b[^>]*class=["'][^"']*page-cover-image[^"']*["'][^>]*>}i, '')
+            body_html = body_html.gsub(/\bpage-header-icon-with-cover\b/, '')
+          end
+
           if open_toggles
             body_html = body_html.gsub(/<details(?![^>]*\bopen\b)/i, '<details open=""')
           end
@@ -578,7 +609,11 @@ module NotionToPdf
           end
         end
 
-        section_html = %(<div class="notion-page-container" id="page-#{p[:id]}">#{body_html}</div>)
+        container_classes = ['notion-page-container']
+        container_classes << 'subpage' if is_subpage
+        container_classes << 'no-cover' if hide_cover
+
+        section_html = %(<div class="#{container_classes.join(' ')}" id="page-#{p[:id]}">#{body_html}</div>)
         merged_sections << section_html
       end
 
@@ -643,13 +678,14 @@ if __FILE__ == $PROGRAM_NAME
     include_toc: false,
     margin: true,
     open_toggles: true,
+    show_subpage_covers: false,
     auto_open: false,
     chrome_path: nil,
     output_pdf: nil
   }
 
   parser = OptionParser.new do |opts|
-    opts.banner = '使用法: notion-html_to_pdf [オプション] [入力ファイルまたはフォルダ]'
+    opts.banner = '使用法: notion-html_to_pdf.rb [オプション] [入力ファイルまたはフォルダ]'
     opts.separator ''
     opts.separator 'Notion HTMLエクスポート（サブページ含む）を1つの高品質PDFに結合します。'
     opts.separator ''
@@ -673,6 +709,14 @@ if __FILE__ == $PROGRAM_NAME
 
     opts.on('--margin [SIZE]', 'ページの余白の有無またはサイズを指定 (例: none, 0, normal, 10mm 等 / デフォルト: normal)') do |v|
       options[:margin] = (v.nil? || v.empty?) ? true : v
+    end
+
+    opts.on('--subpage-covers', 'サブページのヘッダ画像を表示する (デフォルト: 非表示)') do
+      options[:show_subpage_covers] = true
+    end
+
+    opts.on('--no-subpage-covers', 'サブページのヘッダ画像を非表示にする') do
+      options[:show_subpage_covers] = false
     end
 
     opts.on('--keep-toggles-closed', 'トグルリストを自動展開せず閉じたままにする') do
@@ -709,6 +753,12 @@ if __FILE__ == $PROGRAM_NAME
       if margin_choice == '2' || margin_choice&.downcase == 'no'
         options[:margin] = false
       end
+
+      print 'サブページのヘッダ画像を表示しますか？ [1: 非表示(標準) / 2: 表示] (デフォルト: 1): '
+      cover_choice = $stdin.gets&.strip
+      if cover_choice == '2' || cover_choice&.downcase == 'yes'
+        options[:show_subpage_covers] = true
+      end
     end
   end
 
@@ -724,6 +774,7 @@ if __FILE__ == $PROGRAM_NAME
       include_toc: options[:include_toc],
       margin: options[:margin],
       open_toggles: options[:open_toggles],
+      show_subpage_covers: options[:show_subpage_covers],
       chrome_path: options[:chrome_path],
       auto_open: options[:auto_open]
     )
