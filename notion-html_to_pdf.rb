@@ -65,9 +65,12 @@ module NotionToPdf
 
   def extract_zip(zip_path, target_dir)
     if HAVE_RUBYZIP
+      target_root = File.expand_path(target_dir) + File::SEPARATOR
       Zip::File.open(zip_path) do |zip_file|
         zip_file.each do |entry|
-          fpath = File.join(target_dir, entry.name)
+          fpath = File.expand_path(File.join(target_dir, entry.name))
+          raise "不正なZIPエントリです (Zip Slip防止): #{entry.name}" unless fpath.start_with?(target_root)
+
           FileUtils.mkdir_p(File.dirname(fpath))
           zip_file.extract(entry, fpath) unless File.exist?(fpath)
         end
@@ -180,10 +183,12 @@ module NotionToPdf
     end
 
     # sips を用いた JPEG / WebP 等の寸法取得フォールバック (macOS)
-    out = `sips -g pixelWidth -g pixelHeight "#{path}" 2>/dev/null`
-    w = out[/pixelWidth:\s*(\d+)/, 1]&.to_i
-    h = out[/pixelHeight:\s*(\d+)/, 1]&.to_i
-    return [w, h] if w && h && w > 0 && h > 0
+    stdout, status = Open3.capture2('sips', '-g', 'pixelWidth', '-g', 'pixelHeight', path)
+    if status.success?
+      w = stdout[/pixelWidth:\s*(\d+)/, 1]&.to_i
+      h = stdout[/pixelHeight:\s*(\d+)/, 1]&.to_i
+      return [w, h] if w && h && w > 0 && h > 0
+    end
 
     nil
   rescue StandardError
@@ -264,6 +269,7 @@ module NotionToPdf
     end
 
     temp_dir = nil
+    master_html_path = nil
     begin
       if File.file?(input_path) && input_path.downcase.end_with?('.zip')
         temp_dir = Dir.mktmpdir('notion_pdf_')
@@ -285,10 +291,11 @@ module NotionToPdf
         cleaned_out = clean_terminal_path(output_pdf)
         out_dirname = File.dirname(cleaned_out)
         out_basename = File.basename(cleaned_out)
-        final_basename = out_basename.start_with?(date_prefix) ? out_basename : "#{date_prefix}#{out_basename}"
+        final_basename = out_basename =~ /^\d{8}_/ ? out_basename : "#{date_prefix}#{out_basename}"
         output_pdf = File.join(out_dirname, final_basename)
       else
-        output_pdf = File.join(out_dir, "#{date_prefix}#{base_name}.pdf")
+        clean_basename = base_name.sub(/^\d{8}_/, '')
+        output_pdf = File.join(out_dir, "#{date_prefix}#{clean_basename}.pdf")
       end
 
       # HTMLファイルを収集
@@ -1269,6 +1276,7 @@ module NotionToPdf
       system('open', output_pdf) if auto_open
       output_pdf
     ensure
+      File.delete(master_html_path) if master_html_path && File.exist?(master_html_path)
       FileUtils.remove_entry(temp_dir) if temp_dir && File.exist?(temp_dir)
     end
   end
