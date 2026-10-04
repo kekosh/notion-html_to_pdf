@@ -19,35 +19,35 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
 
 ## 使い方
 
-### 方法1: ターミナルからコマンド実行（おすすめ）
+### 方法1: ターミナルからスクリプト実行
 
-シンボリックリンクを設定しているため、任意のディレクトリから `notion-html_to_pdf` コマンドで実行できます：
+本リポジトリのスクリプトを直接、または `ruby` コマンドで実行します：
 
 ```bash
 # 基本的な使い方（元のファイルと同じ場所に「yyyymmdd_元の名前.pdf」が出力されます・余白あり）
-notion-html_to_pdf /path/to/NotionExport.zip
+./notion-html_to_pdf.rb /path/to/NotionExport.zip
 
 # ページの余白なしで作成する場合
-notion-html_to_pdf /path/to/NotionExport.zip --no-margin
+./notion-html_to_pdf.rb /path/to/NotionExport.zip --no-margin
 
 # 余白サイズを任意に指定する場合（例: 10mm）
-notion-html_to_pdf /path/to/NotionExport.zip --margin 10mm
+./notion-html_to_pdf.rb /path/to/NotionExport.zip --margin 10mm
 
 # 先頭に目次ページを含めたい場合
-  /path/to/NotionExport.zip --toc
+./notion-html_to_pdf.rb /path/to/NotionExport.zip --toc
 
 # 生成後にMacのプレビューで自動表示する場合
-notion-html_to_pdf /path/to/NotionExport.zip --open
+./notion-html_to_pdf.rb /path/to/NotionExport.zip --open
 
 # 出力先を指定する場合
-notion-html_to_pdf /path/to/NotionExport.zip -o ~/Desktop/MyDocument.pdf
+./notion-html_to_pdf.rb /path/to/NotionExport.zip -o ~/Desktop/MyDocument.pdf
 ```
 
-引数を省略して `notion-html_to_pdf` のみ実行した場合は、ファイルのドラッグ＆ドロップおよび余白の有無を選択するプロンプトが表示されます。
+引数を省略して `./notion-html_to_pdf.rb` のみ実行した場合は、ファイルのドラッグ＆ドロップおよび余白の有無を選択するプロンプトが表示されます。
 
 ### 方法2: Finderからダブルクリックで実行
 
-1. Finderで [notion-html_to_pdf.command](file:///Users/kekosh/tools/notion-html_to_pdf/notion-html_to_pdf.command) をダブルクリックします。
+1. Finderで `notion-html_to_pdf.command` をダブルクリックします。
 2. ターミナル画面が開いたら、Notionからエクスポートした **ZIPファイル または フォルダ** をドラッグ＆ドロップして **Enter** を押します。
 3. ページの余白の有無（1: 余白あり / 2: 余白なし）を選択します（Enterで標準の余白あり）。
 4. 処理完了後、自動的にプレビュー（Preview.app）でPDFが開きます。
@@ -57,7 +57,7 @@ notion-html_to_pdf /path/to/NotionExport.zip -o ~/Desktop/MyDocument.pdf
 ## オプション一覧
 
 ```
-使用法: notion-html_to_pdf [オプション] [入力ファイルまたはフォルダ]
+使用法: notion-html_to_pdf.rb [オプション] [入力ファイルまたはフォルダ]
 
 オプション:
     -o, --output OUTPUT              出力先PDFファイルパス
@@ -73,8 +73,3 @@ notion-html_to_pdf /path/to/NotionExport.zip -o ~/Desktop/MyDocument.pdf
 
 ---
 
-## ファイル構成
-
-- [notion-html_to_pdf.rb](file:///Users/kekosh/tools/notion-html_to_pdf/notion-html_to_pdf.rb): 変換エンジンのスクリプト本体
-- [notion-html_to_pdf.command](file:///Users/kekosh/tools/notion-html_to_pdf/notion-html_to_pdf.command): Finder用ランチャー
-- コマンドシンボリックリンク: `/Users/kekosh/.local/bin/notion-html_to_pdf` （PATH設定済み）
