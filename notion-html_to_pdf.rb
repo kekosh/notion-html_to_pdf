@@ -148,6 +148,82 @@ module NotionToPdf
     end
   end
 
+  def get_image_size(path)
+    return nil unless path && File.exist?(path)
+
+    bytes = (File.binread(path, 32) rescue nil)
+    if bytes
+      if bytes[0, 8] == "\x89PNG\r\n\x1a\n".b
+        return bytes[16, 8].unpack("N2")
+      elsif bytes.start_with?("GIF87a".b, "GIF89a".b)
+        return bytes[6, 4].unpack("v2")
+      end
+    end
+
+    # sips を用いた JPEG / WebP 等の寸法取得フォールバック (macOS)
+    out = `sips -g pixelWidth -g pixelHeight "#{path}" 2>/dev/null`
+    w = out[/pixelWidth:\s*(\d+)/, 1]&.to_i
+    h = out[/pixelHeight:\s*(\d+)/, 1]&.to_i
+    return [w, h] if w && h && w > 0 && h > 0
+
+    nil
+  rescue StandardError
+    nil
+  end
+
+  def get_callout_figures(callout)
+    figs = callout.css('figure').to_a
+    callout.css('img:not(.icon):not(.notion-static-icon)').each do |img|
+      figs << img unless img.ancestors('figure').any?
+    end
+    figs
+  end
+
+  def estimate_figure_height(fig, page_dir)
+    img = fig.name == 'img' ? fig : fig.at_css('img')
+    return 250.0 unless img
+
+    src = img['src']
+    return 250.0 unless src
+
+    file_path = if src.start_with?('file://')
+                  URI::DEFAULT_PARSER.unescape(src.sub(%r{^file://}, ''))
+                elsif !src.start_with?('http://', 'https://', 'data:')
+                  clean_src = src.split('?').first.split('#').first
+                  File.expand_path(File.join(page_dir, URI::DEFAULT_PARSER.unescape(clean_src)))
+                end
+
+    w_px, h_px = get_image_size(file_path) if file_path
+    if w_px && h_px && w_px > 0 && h_px > 0
+      content_w = 400.0 # コールアウト内の印刷コンテンツ幅 (pt)
+      disp_h = content_w * (h_px.to_f / w_px.to_f)
+      caption = fig.at_css('figcaption')
+      caption_h = caption ? 25.0 : 0.0
+      [disp_h + caption_h + 15.0, 650.0].min
+    else
+      250.0
+    end
+  end
+
+  def estimate_callout_height(callout, page_dir)
+    h = 40.0 # 上下パディングとマージン
+    body = callout.at_css('> div:last-child') || callout
+    figs = get_callout_figures(body)
+    figs.each { |f| h += estimate_figure_height(f, page_dir) }
+
+    body.css('p, h1, h2, h3, h4, h5, h6, li').each do |el|
+      next if el.ancestors('figure').any?
+
+      text = el.text.strip
+      next if text.empty?
+
+      lines = [(text.length / 35.0).ceil, text.lines.count, 1].max
+      line_h = el.name =~ /^h/ ? 28.0 : 20.0
+      h += lines * line_h
+    end
+    h
+  end
+
   def convert(input_path, output_pdf: nil, include_toc: false, margin: true, open_toggles: true, show_subpage_covers: false, chrome_path: nil, auto_open: false)
     input_path = clean_terminal_path(input_path)
     raise "指定されたファイルまたはフォルダが存在しません: #{input_path}" unless File.exist?(input_path)
@@ -263,27 +339,53 @@ module NotionToPdf
       puts ''
 
       # スタイルの抽出（Notion標準スタイルを維持）
-      base_css = ''
+      all_styles = []
       ordered_pages.each do |p|
         if p[:styles] && !p[:styles].empty?
-          base_css = p[:styles].join("\n")
+          all_styles.concat(p[:styles])
           break
         end
       end
-      # Notion標準CSSに含まれる @page { margin: 1in; } を除去してカスタム余白設定と衝突しないようにする
-      clean_base_css = base_css.gsub(/@page\s*\{[^}]*\}/mi, '')
+
+      # @import ルールを抽出してスタイルシートの最上部に配置
+      imports = []
+      other_rules = []
+      all_styles.each do |st|
+        st.scan(/@import\s+url\([^)]+\)[^;]*;?/i) do |imp|
+          clean_imp = imp.strip
+          clean_imp += ';' unless clean_imp.end_with?(';')
+          imports << clean_imp
+        end
+        no_import = st.gsub(/@import\s+url\([^)]+\)[^;]*;?/i, '')
+        no_page = no_import.gsub(/@page\s*\{[^}]*\}/mi, '')
+        other_rules << no_page
+      end
+
+      clean_base_css = other_rules.join("\n")
+      import_css = imports.uniq.join("\n")
 
       # 余白設定の判定
       margin_css = case margin
                    when false, nil, 'none', '0', 'no', '0mm'
-                     '0'
+                     '12mm 10mm 12mm 10mm'
                    when true, 'normal', 'default', 'yes'
                      '18mm 16mm 18mm 16mm'
+                   when 'zero', 'absolute-zero'
+                     '0'
                    else
                      margin.to_s
                    end
 
-      margin_desc = (margin_css == '0') ? 'なし (0mm)' : margin_css
+      margin_desc = case margin_css
+                    when '12mm 10mm 12mm 10mm'
+                      'なし (コンパクト: 上下12mm / 左右10mm)'
+                    when '18mm 16mm 18mm 16mm'
+                      'あり (標準: 上下18mm / 左右16mm)'
+                    when '0'
+                      '完全ゼロ (0mm)'
+                    else
+                      margin_css
+                    end
       puts "📐 余白設定: #{margin_desc}"
       puts "🖼️  サブページヘッダ画像: #{show_subpage_covers ? '表示' : '非表示 (デフォルト)'}"
 
@@ -314,31 +416,6 @@ module NotionToPdf
             page-break-after: avoid !important;
           }
 
-          /* 見出しブロックの上下余白をコンパクトに調整 */
-          h1:not(.page-title) {
-            margin-top: 1.1rem !important;
-            margin-bottom: 0.3rem !important;
-          }
-          h2 {
-            margin-top: 0.85rem !important;
-            margin-bottom: 0.25rem !important;
-          }
-          h3 {
-            margin-top: 0.65rem !important;
-            margin-bottom: 0.2rem !important;
-          }
-          h4 {
-            margin-top: 0.5rem !important;
-            margin-bottom: 0.15rem !important;
-          }
-
-          /* 連続する見出しの間隔調整 */
-          h1 + h2,
-          h1 + h3,
-          h2 + h3 {
-            margin-top: 0.4rem !important;
-          }
-
           /* ページ先頭やコンテナ先頭の見出し上余白を除去 */
           .page-body > h1:first-child,
           .page-body > h2:first-child,
@@ -348,14 +425,6 @@ module NotionToPdf
           header + .page-body > h2:first-child,
           header + .page-body > h3:first-child {
             margin-top: 0 !important;
-          }
-
-          /* 見出し直後の要素（段落、画像、コールアウト、リスト等）の上部余白を詰める */
-          h1 + *,
-          h2 + *,
-          h3 + *,
-          h4 + * {
-            margin-top: 0.3rem !important;
           }
 
           /* トグル内部の見出しリセット */
@@ -385,9 +454,16 @@ module NotionToPdf
             border-radius: 3px !important;
           }
 
-          /* ページリンク（サブページ導線）ブロックの余白 */
-          figure.link-to-page {
-            margin: 0.3em 0 !important;
+          /* ページリンク（サブページ導線）ブロックの余白・デザイン統一 */
+          figure.link-to-page,
+          .link-to-page {
+            margin: 0.18em 0 !important;
+            padding: 0 !important;
+            font-weight: 500 !important;
+          }
+          figure.link-to-page + figure.link-to-page,
+          .link-to-page + .link-to-page {
+            margin-top: 0.12em !important;
           }
 
           /* 空のページ説明文のマージンを除去し、タイトル下の余白を適正化 */
@@ -403,12 +479,11 @@ module NotionToPdf
             margin-bottom: 0.4em !important;
           }
 
-          /* 2. コンテンツブロックの分断防止 */
-          .callout,
-          aside,
+          /* 2. コンテンツブロックの分断防止と改ページ制御 */
+          figure,
           figure.image,
           tr,
-          pre, code, blockquote, figure, .collection-content, .board-card {
+          pre, code, blockquote, .collection-content, .board-card {
             break-inside: avoid !important;
             page-break-inside: avoid !important;
           }
@@ -420,10 +495,10 @@ module NotionToPdf
             display: table-header-group !important;
           }
 
-          /* 3. 画像の最大高さ制限による押し出し防止 */
+          /* 3. 画像のサイズ設定 */
           img {
             max-width: 100% !important;
-            max-height: 42vh !important;
+            max-height: 100vh !important;
             width: auto !important;
             height: auto !important;
             object-fit: contain;
@@ -450,14 +525,37 @@ module NotionToPdf
             page-break-before: always !important;
           }
 
-          /* 5. コールアウトのアイコンとテキストの上下・左右のズレ解消 */
+          /* 5. コールアウトの改ページ対応およびアイコンとテキストの上下・左右のズレ解消 */
           .callout,
-          aside.callout {
+          aside.callout,
+          aside {
             display: flex !important;
             flex-direction: row !important;
             align-items: flex-start !important;
+            white-space: normal !important;
+            border-radius: 10px !important;
+            padding: 1rem !important;
+            -webkit-box-decoration-break: clone !important;
+            box-decoration-break: clone !important;
+            break-inside: auto !important;
+            page-break-inside: auto !important;
+            margin-top: 1rem !important;
+            margin-bottom: 1rem !important;
           }
-          .callout > div:first-child {
+          /* 連続するコールアウトの間隔を詰める */
+          .callout + .callout,
+          aside.callout + aside.callout,
+          aside + aside {
+            margin-top: 0.5rem !important;
+          }
+          /* コールアウト内部要素（段落・画像等）の余白適正化 */
+          .callout figure,
+          .callout figure.image {
+            margin-top: 0.4rem !important;
+            margin-bottom: 0.2rem !important;
+          }
+          /* アイコン付きコールアウトのアイコン領域（直後に本文divがある1つ目のdiv） */
+          .callout > div:first-child:not(:last-child) {
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
@@ -466,10 +564,11 @@ module NotionToPdf
             min-width: 1.5rem !important;
             max-width: 1.5rem !important;
             margin-right: 10px !important;
+            margin-top: 2px !important;
             flex-shrink: 0 !important;
             line-height: 1 !important;
           }
-          .callout > div:first-child .icon {
+          .callout > div:first-child:not(:last-child) .icon {
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
@@ -480,12 +579,12 @@ module NotionToPdf
             line-height: 1 !important;
             font-size: 1.25rem !important;
           }
-          .callout > div:first-child .icon[data-emoji]::before {
+          .callout > div:first-child:not(:last-child) .icon[data-emoji]::before {
             display: block !important;
             line-height: 1 !important;
             text-align: center !important;
           }
-          .callout > div:first-child img,
+          .callout > div:first-child:not(:last-child) img,
           .callout .icon img,
           .callout img.icon,
           .callout img.notion-static-icon {
@@ -495,13 +594,41 @@ module NotionToPdf
             max-height: 1.25rem !important;
             object-fit: contain !important;
           }
+          /* コールアウト本文領域（最後のdiv、またはアイコン無しの唯一のdiv） */
           .callout > div:last-child {
             flex: 1 1 auto !important;
+            width: 100% !important;
             min-width: 0 !important;
             line-height: 1.5 !important;
+            white-space: normal !important;
+          }
+          .callout > div:only-child {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin-right: 0 !important;
+            margin-top: 0 !important;
+          }
+          .callout > div:last-child p {
+            white-space: pre-wrap !important;
+            margin: 0 !important;
           }
           .callout > div:last-child > :first-child {
             margin-top: 0 !important;
+          }
+          .callout > div:last-child > :last-child {
+            margin-bottom: 0 !important;
+          }
+
+          /* 6. コールアウト内のテキストと直下の画像のセット化（改ページ泣き別れ防止） */
+          .callout.callout-atomic,
+          .callout-figure-pair {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
+          }
+          .callout p:has(+ figure),
+          .callout p:has(+ .image) {
+            break-after: avoid !important;
+            page-break-after: avoid !important;
           }
 
           details {
@@ -517,6 +644,10 @@ module NotionToPdf
           padding-top: 0 !important;
         }
         .page-body {
+          white-space: normal !important;
+        }
+        .page-body p,
+        .page-body li {
           white-space: pre-wrap;
         }
         .page-cover-image {
@@ -679,6 +810,90 @@ module NotionToPdf
             end
           end
 
+          # 単独のページリンクやメンションを含む段落 <p> を figure.link-to-page に正規化
+          article.css('p').each do |p_node|
+            link = p_node.at_css('> a')
+            next unless link
+
+            non_link_text = p_node.children.reject { |c| c == link }.map(&:text).join.strip
+            if non_link_text.empty? && (link['data-notion-page-id'] || link.at_css('.icon'))
+              p_node.name = 'figure'
+              classes = (p_node['class'] || '').split
+              classes << 'link-to-page' unless classes.include?('link-to-page')
+              p_node['class'] = classes.join(' ')
+            end
+          end
+
+          # コールアウト内のテキストと画像のセット化・分割処理
+          # コールアウト全体が1ページで表示できる場合は分割せず維持
+          # 複数ページに渡る場合のみ画像単位でコールアウトを分割
+          article.css('.callout').to_a.each do |callout|
+            figures = get_callout_figures(callout)
+            next if figures.empty?
+
+            est_h = estimate_callout_height(callout, page_dir)
+
+            if est_h <= 650.0 || figures.size <= 1
+              # コールアウト全体が1ページで表示できる、または画像が1件のみの場合は分割しない
+              classes = (callout['class'] || '').split
+              classes << 'callout-atomic' unless classes.include?('callout-atomic')
+              callout['class'] = classes.join(' ')
+            else
+              # 複数ページに渡って表示される場合は画像ごとにコールアウト自体を分割
+              icon_div = callout.at_css('> div:first-child:not(:last-child)')
+              body_div = callout.element_children.last
+              next unless body_div
+
+              children = body_div.element_children.to_a
+              segments = []
+              current_segment = []
+
+              children.each do |child|
+                current_segment << child
+                if child.name == 'figure' || child.at_css('img:not(.icon):not(.notion-static-icon)')
+                  segments << current_segment
+                  current_segment = []
+                end
+              end
+
+              if !current_segment.empty?
+                if segments.empty?
+                  segments << current_segment
+                else
+                  segments.last.concat(current_segment)
+                end
+              end
+
+              next if segments.size <= 1
+
+              # 各セグメントから独立したコールアウトを生成
+              new_callouts = segments.each_with_index.map do |seg, idx|
+                new_aside = Nokogiri::XML::Node.new('aside', doc)
+                callout.attributes.each do |attr_name, attr_val|
+                  new_aside[attr_name] = attr_val.value
+                end
+                classes = (new_aside['class'] || '').split
+                classes << 'callout-atomic' unless classes.include?('callout-atomic')
+                new_aside['class'] = classes.join(' ')
+
+                # 1つ目の分割コールアウトには元のアイコンを含める
+                new_aside.add_child(icon_div.dup) if idx.zero? && icon_div
+
+                new_body = Nokogiri::XML::Node.new('div', doc)
+                body_div.attributes.each do |attr_name, attr_val|
+                  new_body[attr_name] = attr_val.value
+                end
+                seg.each { |el| new_body.add_child(el) }
+                new_aside.add_child(new_body)
+
+                new_aside
+              end
+
+              new_callouts.each { |nc| callout.add_previous_sibling(nc) }
+              callout.remove
+            end
+          end
+
           body_html = article.to_html
         else
           # Nokogiri がない場合の正規表現フォールバック
@@ -752,6 +967,56 @@ module NotionToPdf
           end
         end
 
+        unless HAVE_NOKOGIRI
+          # 単独のページリンク段落を figure.link-to-page に正規化
+          body_html = body_html.gsub(%r{<p\b([^>]*)>\s*(<a\b[^>]*(?:data-notion-page-id|class=["'][^"']*icon)[^>]*>.*?</a>)\s*</p>}im) do
+            attrs = Regexp.last_match(1)
+            link_content = Regexp.last_match(2)
+            clean_attrs = attrs.gsub(/\bclass=["'][^"']*["']/i, '')
+            %(<figure class="link-to-page"#{clean_attrs}>#{link_content}</figure>)
+          end
+
+          # コールアウト内のテキストと直下の画像をセット化・分割
+          body_html = body_html.gsub(%r{(<aside\b([^>]*)class=["']([^"']*callout[^"']*)["']([^>]*)>)(.*?)(</aside>)}m) do
+            full_aside = Regexp.last_match(0)
+            before_class = Regexp.last_match(2)
+            classes = Regexp.last_match(3)
+            after_class = Regexp.last_match(4)
+            c_body = Regexp.last_match(5)
+            c_close = Regexp.last_match(6)
+
+            fig_count = c_body.scan(/<figure\b/i).size
+            text_chars = c_body.gsub(/<[^>]+>/, '').strip.length
+            est_h = 40.0 + (fig_count * 250.0) + ((text_chars / 35.0) * 20.0)
+
+            if est_h <= 650.0 || fig_count <= 1
+              classes_with_atomic = "#{classes} callout-atomic"
+              %(<aside #{before_class}class="#{classes_with_atomic}"#{after_class}>#{c_body}#{c_close})
+            else
+              # 複数ページに渡る場合は2つ目以降の画像ごとにコールアウトを分割
+              pairs = c_body.split(/(?<=<\/figure>)/i)
+              new_callouts = pairs.map.with_index do |part, idx|
+                part_trimmed = part.strip
+                next nil if part_trimmed.empty?
+
+                content = if idx.zero?
+                            part_trimmed
+                          else
+                            part_trimmed.sub(%r{<div\b[^>]*class=["'][^"']*icon[^"']*["'][^>]*>.*?</div>}im, '')
+                          end
+                %(<aside #{before_class}class="#{classes} callout-atomic"#{after_class}>#{content}#{c_close})
+              end.compact
+              new_callouts.empty? ? full_aside : new_callouts.join("\n")
+            end
+          end
+        end
+
+        # コールアウト内の不要なタグ間改行（white-space: pre-wrap 下で空白行化するもの）を除去
+        body_html = body_html.gsub(/(<aside\b[^>]*class=["'][^"']*callout[^"']*["'][^>]*>.*?<\/aside>)/m) do |callout_chunk|
+          callout_chunk.gsub(/(<div\b[^>]*>)\s*\n\s*(<[a-z0-9]+)/i, '\1\2')
+                       .gsub(/(<\/[a-z0-9]+>)\s*\n\s*(<div\b)/i, '\1\2')
+        end
+
         container_classes = ['notion-page-container']
         container_classes << 'subpage' if is_subpage
         container_classes << 'no-cover' if hide_cover
@@ -768,6 +1033,7 @@ module NotionToPdf
           <meta charset="utf-8">
           <title>#{ordered_pages.first[:title]}</title>
           <style>
+            #{import_css}
             #{clean_base_css}
             #{print_opt_css}
           </style>
@@ -846,11 +1112,11 @@ if __FILE__ == $PROGRAM_NAME
       options[:include_toc] = false
     end
 
-    opts.on('--no-margin', 'ページの余白なし（0mm）で作成する') do
+    opts.on('--no-margin', 'ページの余白なし（コンパクト: 上下12mm/左右10mm）で作成する') do
       options[:margin] = false
     end
 
-    opts.on('--margin [SIZE]', 'ページの余白の有無またはサイズを指定 (例: none, 0, normal, 10mm 等 / デフォルト: normal)') do |v|
+    opts.on('--margin [SIZE]', 'ページの余白の有無またはサイズを指定 (例: none, normal, 10mm 等 / デフォルト: normal)') do |v|
       options[:margin] = (v.nil? || v.empty?) ? true : v
     end
 
@@ -891,7 +1157,7 @@ if __FILE__ == $PROGRAM_NAME
     input_path = $stdin.gets&.strip
 
     if input_path && !input_path.empty?
-      print 'ページの余白を設定しますか？ [1: 余白あり(標準) / 2: 余白なし] (デフォルト: 1): '
+      print 'ページの余白を設定しますか？ [1: 余白あり(標準) / 2: 余白なし(コンパクト)] (デフォルト: 1): '
       margin_choice = $stdin.gets&.strip
       if margin_choice == '2' || margin_choice&.downcase == 'no'
         options[:margin] = false

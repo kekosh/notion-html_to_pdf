@@ -27,7 +27,7 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
 # 基本的な使い方（元のファイルと同じ場所に「yyyymmdd_元の名前.pdf」が出力されます・余白あり）
 ./notion-html_to_pdf.rb /path/to/NotionExport.zip
 
-# ページの余白なしで作成する場合
+# ページの余白なし（コンパクト）で作成する場合
 ./notion-html_to_pdf.rb /path/to/NotionExport.zip --no-margin
 
 # 余白サイズを任意に指定する場合（例: 10mm）
@@ -53,7 +53,7 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
 
 1. Finderで `notion-html_to_pdf.command` をダブルクリックします。
 2. ターミナル画面が開いたら、Notionからエクスポートした **ZIPファイル または フォルダ** をドラッグ＆ドロップして **Enter** を押します。
-3. ページの余白の有無（1: 余白あり / 2: 余白なし）を選択します（Enterで標準の余白あり）。
+3. ページの余白の有無（1: 余白あり(標準) / 2: 余白なし(コンパクト)）を選択します（Enterで標準の余白あり）。
 4. サブページのヘッダ画像の表示/非表示（1: 非表示 / 2: 表示）を選択します（Enterで標準の非表示）。
 5. 処理完了後、自動的にプレビュー（Preview.app）でPDFが開きます。
 
@@ -68,8 +68,8 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
     -o, --output OUTPUT              出力先PDFファイルパス
         --toc                        先頭の目次ページを生成する (デフォルト: 生成しない)
         --no-toc                     先頭の目次ページを生成しない
-        --no-margin                  ページの余白なし（0mm）で作成する
-        --margin [SIZE]              ページの余白の有無またはサイズを指定 (例: none, 0, normal, 10mm 等 / デフォルト: normal)
+        --no-margin                  ページの余白なし（コンパクト: 上下12mm/左右10mm）で作成する
+        --margin [SIZE]              ページの余白の有無またはサイズを指定 (例: none, normal, 10mm 等 / デフォルト: normal)
         --subpage-covers             サブページのヘッダ画像を表示する (デフォルト: 非表示)
         --no-subpage-covers          サブページのヘッダ画像を非表示にする
         --keep-toggles-closed        トグルリストを自動展開せず閉じたままにする
