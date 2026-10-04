@@ -22,6 +22,11 @@ else
     echo "  [2] 余白なし"
     read -r -p "▶ 選択 (デフォルト: 1): " MARGIN_CHOICE
     echo ""
+    echo "サブページのヘッダ画像（カバー画像）を選択してください："
+    echo "  [1] 非表示 (標準)"
+    echo "  [2] 表示する"
+    read -r -p "▶ 選択 (デフォルト: 1): " COVER_CHOICE
+    echo ""
 fi
 
 if [ -z "$TARGET" ]; then
@@ -34,7 +39,12 @@ if [ "$MARGIN_CHOICE" = "2" ] || [ "$MARGIN_CHOICE" = "no" ]; then
     MARGIN_OPT="--no-margin"
 fi
 
-ruby "$RUBY_SCRIPT" "$TARGET" $MARGIN_OPT --open
+COVER_OPT=""
+if [ "$COVER_CHOICE" = "2" ] || [ "$COVER_CHOICE" = "yes" ]; then
+    COVER_OPT="--subpage-covers"
+fi
+
+ruby "$RUBY_SCRIPT" "$TARGET" $MARGIN_OPT $COVER_OPT --open
 
 echo ""
 echo "キーを押すとこのウィンドウを閉じます..."

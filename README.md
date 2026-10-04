@@ -36,6 +36,9 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
 # 先頭に目次ページを含めたい場合
 ./notion-html_to_pdf.rb /path/to/NotionExport.zip --toc
 
+# サブページのヘッダ画像を表示する場合（デフォルトは非表示）
+./notion-html_to_pdf.rb /path/to/NotionExport.zip --subpage-covers
+
 # 生成後にMacのプレビューで自動表示する場合
 ./notion-html_to_pdf.rb /path/to/NotionExport.zip --open
 
@@ -43,14 +46,15 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
 ./notion-html_to_pdf.rb /path/to/NotionExport.zip -o ~/Desktop/MyDocument.pdf
 ```
 
-引数を省略して `./notion-html_to_pdf.rb` のみ実行した場合は、ファイルのドラッグ＆ドロップおよび余白の有無を選択するプロンプトが表示されます。
+引数を省略して `./notion-html_to_pdf.rb` のみ実行した場合は、ファイルのドラッグ＆ドロップ、余白の有無、サブページヘッダ画像の表示/非表示を選択するプロンプトが表示されます。
 
 ### 方法2: Finderからダブルクリックで実行
 
 1. Finderで `notion-html_to_pdf.command` をダブルクリックします。
 2. ターミナル画面が開いたら、Notionからエクスポートした **ZIPファイル または フォルダ** をドラッグ＆ドロップして **Enter** を押します。
 3. ページの余白の有無（1: 余白あり / 2: 余白なし）を選択します（Enterで標準の余白あり）。
-4. 処理完了後、自動的にプレビュー（Preview.app）でPDFが開きます。
+4. サブページのヘッダ画像の表示/非表示（1: 非表示 / 2: 表示）を選択します（Enterで標準の非表示）。
+5. 処理完了後、自動的にプレビュー（Preview.app）でPDFが開きます。
 
 ---
 
@@ -65,6 +69,8 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
         --no-toc                     先頭の目次ページを生成しない
         --no-margin                  ページの余白なし（0mm）で作成する
         --margin [SIZE]              ページの余白の有無またはサイズを指定 (例: none, 0, normal, 10mm 等 / デフォルト: normal)
+        --subpage-covers             サブページのヘッダ画像を表示する (デフォルト: 非表示)
+        --no-subpage-covers          サブページのヘッダ画像を非表示にする
         --keep-toggles-closed        トグルリストを自動展開せず閉じたままにする
         --chrome-path PATH           Google Chrome の実行ファイルパスを手動指定
         --open                       PDF生成後にプレビュー（Preview.app）で開く
@@ -73,3 +79,7 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
 
 ---
 
+## ファイル構成
+
+- [notion-html_to_pdf.rb](notion-html_to_pdf.rb): 変換エンジンのスクリプト本体
+- [notion-html_to_pdf.command](notion-html_to_pdf.command): Finder用ランチャー
