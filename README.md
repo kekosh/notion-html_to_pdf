@@ -46,7 +46,8 @@ Notionから「サブページを含める」形式でHTMLエクスポートし�
 ./notion-html_to_pdf.rb /path/to/NotionExport.zip -o ~/Desktop/MyDocument.pdf
 ```
 
-引数を省略して `./notion-html_to_pdf.rb` のみ実行した場合は、ファイルのドラッグ＆ドロップ、余白の有無、サブページヘッダ画像の表示/非表示を選択するプロンプトが表示されます。
+引数を省略して `./notion-html_to_pdf.rb` のみ実行した場合は、ファイルのドラッグ＆ドロップ、余白の有無、サブページのヘッダ画像の表示/非表示を選択するプロンプトが表示されます。
+
 
 ### 方法2: Finderからダブルクリックで実行
 

@@ -308,10 +308,99 @@ module NotionToPdf
             page-break-before: auto !important;
           }
 
-          /* 1. 見出しの泣き別れ防止 */
+          /* 1. 見出しの泣き別れ防止 & 余白の最適化 */
           h1, h2, h3, h4, summary, .chapter-header {
             break-after: avoid !important;
             page-break-after: avoid !important;
+          }
+
+          /* 見出しブロックの上下余白をコンパクトに調整 */
+          h1:not(.page-title) {
+            margin-top: 1.1rem !important;
+            margin-bottom: 0.3rem !important;
+          }
+          h2 {
+            margin-top: 0.85rem !important;
+            margin-bottom: 0.25rem !important;
+          }
+          h3 {
+            margin-top: 0.65rem !important;
+            margin-bottom: 0.2rem !important;
+          }
+          h4 {
+            margin-top: 0.5rem !important;
+            margin-bottom: 0.15rem !important;
+          }
+
+          /* 連続する見出しの間隔調整 */
+          h1 + h2,
+          h1 + h3,
+          h2 + h3 {
+            margin-top: 0.4rem !important;
+          }
+
+          /* ページ先頭やコンテナ先頭の見出し上余白を除去 */
+          .page-body > h1:first-child,
+          .page-body > h2:first-child,
+          .page-body > h3:first-child,
+          .page-body > h4:first-child,
+          header + .page-body > h1:first-child,
+          header + .page-body > h2:first-child,
+          header + .page-body > h3:first-child {
+            margin-top: 0 !important;
+          }
+
+          /* 見出し直後の要素（段落、画像、コールアウト、リスト等）の上部余白を詰める */
+          h1 + *,
+          h2 + *,
+          h3 + *,
+          h4 + * {
+            margin-top: 0.3rem !important;
+          }
+
+          /* トグル内部の見出しリセット */
+          summary h1,
+          summary h2,
+          summary h3,
+          summary h4 {
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+          }
+
+          /* コールアウト内部の見出しリセット */
+          .callout h1,
+          .callout h2,
+          .callout h3,
+          .callout h4 {
+            margin-top: 0 !important;
+            margin-bottom: 0.3rem !important;
+          }
+
+          /* 背景色付き見出しのパディングと角丸 */
+          h1[class*="block-color-"],
+          h2[class*="block-color-"],
+          h3[class*="block-color-"],
+          h4[class*="block-color-"] {
+            padding: 0.15em 0.35em !important;
+            border-radius: 3px !important;
+          }
+
+          /* ページリンク（サブページ導線）ブロックの余白 */
+          figure.link-to-page {
+            margin: 0.3em 0 !important;
+          }
+
+          /* 空のページ説明文のマージンを除去し、タイトル下の余白を適正化 */
+          p.page-description:empty {
+            margin: 0 !important;
+            display: none !important;
+          }
+          .page-description {
+            margin-top: 0.2em !important;
+            margin-bottom: 0.6em !important;
+          }
+          .page-title {
+            margin-bottom: 0.4em !important;
           }
 
           /* 2. コンテンツブロックの分断防止 */
@@ -348,7 +437,7 @@ module NotionToPdf
             object-fit: contain !important;
             object-position: center !important;
           }
-          .page-header-icon img, img.icon {
+          .page-header-icon img {
             max-width: none !important;
             max-height: none !important;
             object-fit: contain;
@@ -359,6 +448,60 @@ module NotionToPdf
           .force-page-break {
             break-before: page !important;
             page-break-before: always !important;
+          }
+
+          /* 5. コールアウトのアイコンとテキストの上下・左右のズレ解消 */
+          .callout,
+          aside.callout {
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: flex-start !important;
+          }
+          .callout > div:first-child {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 1.5rem !important;
+            height: 1.5rem !important;
+            min-width: 1.5rem !important;
+            max-width: 1.5rem !important;
+            margin-right: 10px !important;
+            flex-shrink: 0 !important;
+            line-height: 1 !important;
+          }
+          .callout > div:first-child .icon {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 100% !important;
+            height: 100% !important;
+            margin-right: 0 !important;
+            vertical-align: middle !important;
+            line-height: 1 !important;
+            font-size: 1.25rem !important;
+          }
+          .callout > div:first-child .icon[data-emoji]::before {
+            display: block !important;
+            line-height: 1 !important;
+            text-align: center !important;
+          }
+          .callout > div:first-child img,
+          .callout .icon img,
+          .callout img.icon,
+          .callout img.notion-static-icon {
+            width: 1.25rem !important;
+            height: 1.25rem !important;
+            max-width: 1.25rem !important;
+            max-height: 1.25rem !important;
+            object-fit: contain !important;
+          }
+          .callout > div:last-child {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            line-height: 1.5 !important;
+          }
+          .callout > div:last-child > :first-child {
+            margin-top: 0 !important;
           }
 
           details {
