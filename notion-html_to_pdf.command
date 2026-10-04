@@ -18,8 +18,8 @@ else
     read -r -p "▶ 対象: " TARGET
     echo ""
     echo "ページの余白を選択してください："
-    echo "  [1] 余白あり (標準)"
-    echo "  [2] 余白なし"
+    echo "  [1] 余白あり (標準: 上下18mm / 左右16mm)"
+    echo "  [2] 余白なし (コンパクト: 上下12mm / 左右10mm)"
     read -r -p "▶ 選択 (デフォルト: 1): " MARGIN_CHOICE
     echo ""
     echo "サブページのヘッダ画像（カバー画像）を選択してください："
