@@ -113,7 +113,8 @@ module NotionToPdf
     links = []
     if HAVE_NOKOGIRI
       doc = Nokogiri::HTML(html_content, nil, 'UTF-8')
-      doc.css('a[href]').each do |a|
+      # 1. figure.link-to-page や .link-to-page 内の正式なサブページ導線リンク
+      doc.css('figure.link-to-page a[href], .link-to-page a[href]').each do |a|
         href = a['href']
         next if href.nil? || href.start_with?('#', 'http://', 'https://', 'mailto:')
 
@@ -121,14 +122,32 @@ module NotionToPdf
         next unless clean_href.downcase.end_with?('.html')
 
         unquoted = URI::DEFAULT_PARSER.unescape(clean_href)
-        abs_target = File.expand_path(File.join(file_dir, unquoted))
+        abs_target = File.expand_path(File.join(file_dir, unquoted)).unicode_normalize(:nfc)
         links << abs_target
       end
+
+      # 2. 段落全体が単独のページリンクになっているもの (Notionエクスポートの別形式対応)
+      doc.css('p > a[href]').each do |a|
+        p_node = a.parent
+        non_link_text = p_node.children.reject { |c| c == a }.map(&:text).join.strip
+        if non_link_text.empty? && (a['data-notion-page-id'] || a.at_css('.icon'))
+          href = a['href']
+          next if href.nil? || href.start_with?('#', 'http://', 'https://', 'mailto:')
+
+          clean_href = href.split('?').first.split('#').first
+          next unless clean_href.downcase.end_with?('.html')
+
+          unquoted = URI::DEFAULT_PARSER.unescape(clean_href)
+          abs_target = File.expand_path(File.join(file_dir, unquoted)).unicode_normalize(:nfc)
+          links << abs_target
+        end
+      end
     else
-      html_content.scan(/<a\b[^>]*\bhref=["']([^"'#]+\.html)(?:#[^"']*)?["']/i) do |match|
+      # 正規表現フォールバック: link-to-page クラスを持つブロック内のリンクのみ抽出
+      html_content.scan(%r{<(?:figure|div|p)\b[^>]*class=["'][^"']*link-to-page[^"']*["'][^>]*>\s*<a\b[^>]*\bhref=["']([^"'#]+\.html)(?:#[^"']*)?["']}i) do |match|
         raw_href = match.first
         unquoted = URI::DEFAULT_PARSER.unescape(raw_href)
-        abs_target = File.expand_path(File.join(file_dir, unquoted))
+        abs_target = File.expand_path(File.join(file_dir, unquoted)).unicode_normalize(:nfc)
         links << abs_target
       end
     end
@@ -193,9 +212,20 @@ module NotionToPdf
                   File.expand_path(File.join(page_dir, URI::DEFAULT_PARSER.unescape(clean_src)))
                 end
 
+    # インラインスタイルで指定された幅があれば取得 (例: style="width:240px")
+    specified_w_pt = nil
+    [img, fig].each do |el|
+      next unless el && el['style']
+
+      if el['style'] =~ /width:\s*([\d.]+)px/i
+        specified_w_pt = Regexp.last_match(1).to_f * 0.75
+        break
+      end
+    end
+
     w_px, h_px = get_image_size(file_path) if file_path
     if w_px && h_px && w_px > 0 && h_px > 0
-      content_w = 400.0 # コールアウト内の印刷コンテンツ幅 (pt)
+      content_w = [specified_w_pt || 400.0, 400.0].min
       disp_h = content_w * (h_px.to_f / w_px.to_f)
       caption = fig.at_css('figcaption')
       caption_h = caption ? 25.0 : 0.0
@@ -224,7 +254,7 @@ module NotionToPdf
     h
   end
 
-  def convert(input_path, output_pdf: nil, include_toc: false, margin: true, open_toggles: true, show_subpage_covers: false, chrome_path: nil, auto_open: false)
+  def convert(input_path, output_pdf: nil, include_toc: false, margin: true, open_toggles: true, show_subpage_covers: false, header_footer: true, header: true, footer: true, header_title: nil, header_align: 'right', chrome_path: nil, auto_open: false)
     input_path = clean_terminal_path(input_path)
     raise "指定されたファイルまたはフォルダが存在しません: #{input_path}" unless File.exist?(input_path)
 
@@ -265,7 +295,7 @@ module NotionToPdf
       all_html_files = Dir.glob(File.join(source_dir, '**', '*.html')).reject do |f|
         bn = File.basename(f)
         bn.start_with?('._') || bn.start_with?('_merged_')
-      end.map { |f| File.expand_path(f) }
+      end.map { |f| File.expand_path(f).unicode_normalize(:nfc) }
 
       raise "フォルダ内にHTMLファイルが見つかりませんでした: #{input_path}" if all_html_files.empty?
 
@@ -389,11 +419,53 @@ module NotionToPdf
       puts "📐 余白設定: #{margin_desc}"
       puts "🖼️  サブページヘッダ画像: #{show_subpage_covers ? '表示' : '非表示 (デフォルト)'}"
 
+      display_header = (header_title || File.basename(output_pdf)).to_s
+      escaped_header = display_header.gsub('\\', '\\\\\\\\').gsub('"', '\"')
+
+      header_box = case header_align.to_s.downcase
+                   when 'left' then '@top-left'
+                   when 'center' then '@top-center'
+                   else '@top-right'
+                   end
+
+      header_rule = if header_footer && header
+                      <<~CSS
+                        #{header_box} {
+                          content: "#{escaped_header}";
+                          font-size: 8.5pt;
+                          color: #666666;
+                          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif;
+                        }
+                      CSS
+                    else
+                      ''
+                    end
+
+      footer_rule = if header_footer && footer
+                      <<~CSS
+                        @bottom-center {
+                          content: "- " counter(page) " -";
+                          font-size: 9pt;
+                          color: #555555;
+                          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif;
+                        }
+                      CSS
+                    else
+                      ''
+                    end
+
+      hf_desc = []
+      hf_desc << "ヘッダー: #{display_header}" if header_footer && header
+      hf_desc << 'フッター: - No -' if header_footer && footer
+      puts "📑 ヘッダー/フッター: #{hf_desc.empty? ? '無効' : hf_desc.join(' / ')}"
+
       # PDF印刷用最適化CSS
       print_opt_css = <<~CSS
         @page {
           size: A4;
           margin: #{margin_css};
+          #{header_rule}
+          #{footer_rule}
         }
         @media print {
           body {
@@ -414,6 +486,20 @@ module NotionToPdf
           h1, h2, h3, h4, summary, .chapter-header {
             break-after: avoid !important;
             page-break-after: avoid !important;
+          }
+
+          /* 見出しタグの上下マージン適正化 */
+          h1:not(.page-title) {
+            margin-top: 1.5rem !important;
+            margin-bottom: 0.6rem !important;
+          }
+          h2 {
+            margin-top: 1.3rem !important;
+            margin-bottom: 0.5rem !important;
+          }
+          h3 {
+            margin-top: 1.1rem !important;
+            margin-bottom: 0.4rem !important;
           }
 
           /* ページ先頭やコンテナ先頭の見出し上余白を除去 */
@@ -476,7 +562,8 @@ module NotionToPdf
             margin-bottom: 0.6em !important;
           }
           .page-title {
-            margin-bottom: 0.4em !important;
+            margin-top: 1.2rem !important;
+            margin-bottom: 0.8rem !important;
           }
 
           /* 2. コンテンツブロックの分断防止と改ページ制御 */
@@ -499,7 +586,6 @@ module NotionToPdf
           img {
             max-width: 100% !important;
             max-height: 100vh !important;
-            width: auto !important;
             height: auto !important;
             object-fit: contain;
             break-inside: avoid !important;
@@ -523,6 +609,11 @@ module NotionToPdf
           .force-page-break {
             break-before: page !important;
             page-break-before: always !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            display: block !important;
           }
 
           /* 5. コールアウトの改ページ対応およびアイコンとテキストの上下・左右のズレ解消 */
@@ -548,11 +639,24 @@ module NotionToPdf
           aside + aside {
             margin-top: 0.5rem !important;
           }
-          /* コールアウト内部要素（段落・画像等）の余白適正化 */
+          /* コールアウト内部要素（段落・画像等）の余白適正化と左寄せ（センタリング解除） */
           .callout figure,
-          .callout figure.image {
+          .callout figure.image,
+          .callout .image {
             margin-top: 0.4rem !important;
             margin-bottom: 0.2rem !important;
+            text-align: left !important;
+          }
+          .callout figure a,
+          .callout .image a {
+            display: inline-block !important;
+            text-align: left !important;
+          }
+          .callout figure img,
+          .callout .image img {
+            display: inline-block !important;
+            margin-left: 0 !important;
+            margin-right: auto !important;
           }
           /* アイコン付きコールアウトのアイコン領域（直後に本文divがある1つ目のdiv） */
           .callout > div:first-child:not(:last-child) {
@@ -631,6 +735,14 @@ module NotionToPdf
             page-break-after: avoid !important;
           }
 
+          /* 7. サブページのヘッダ画像非表示時のみ、不要なページアイコン (🪙) の非表示 */
+          .notion-page-container.subpage.no-cover .page-header-icon:has([data-emoji="🪙"]),
+          .notion-page-container.subpage.no-cover [data-notion-page-icon] .page-header-icon,
+          .notion-page-container.subpage.no-cover .page-header-icon,
+          .notion-page-container.subpage.no-cover .icon[data-emoji="🪙"] {
+            display: none !important;
+          }
+
           details {
             display: block !important;
           }
@@ -646,9 +758,28 @@ module NotionToPdf
         .page-body {
           white-space: normal !important;
         }
-        .page-body p,
-        .page-body li {
+        .page-body p {
           white-space: pre-wrap;
+        }
+        .page-body li,
+        li {
+          white-space: normal !important;
+          line-height: 1.6 !important;
+        }
+        ul.bulleted-list,
+        ol.numbered-list {
+          margin-top: 0.25em !important;
+          margin-bottom: 0.25em !important;
+        }
+        ul.bulleted-list + ul.bulleted-list,
+        ol.numbered-list + ol.numbered-list {
+          margin-top: 0 !important;
+          margin-bottom: 0.25em !important;
+        }
+        li > ul,
+        li > ol {
+          margin-top: 0.15em !important;
+          margin-bottom: 0.15em !important;
         }
         .page-cover-image {
           margin-top: 0 !important;
@@ -736,7 +867,7 @@ module NotionToPdf
       end
 
       # 内部リンク書き換え用ルックアップ
-      path_to_id = ordered_pages.each_with_object({}) { |p, h| h[p[:path]] = p[:id] }
+      path_to_id = ordered_pages.each_with_object({}) { |p, h| h[p[:path].unicode_normalize(:nfc)] = p[:id] }
 
       # 各ページ内容の結合・整形
       ordered_pages.each do |p|
@@ -754,6 +885,20 @@ module NotionToPdf
             article.css('img.page-cover-image, .page-cover-image').remove
             article.css('.page-header-icon-with-cover').each do |el|
               el['class'] = el['class'].gsub(/\bpage-header-icon-with-cover\b/, '').strip
+            end
+          end
+
+          # サブページヘッダ画像が非表示設定の場合のみ、data-notion-page-icon およびアイコンを削除
+          if hide_cover
+            article.remove_attribute('data-notion-page-icon')
+
+            # サブページのヘッダー内アイコン (.page-header-icon) の削除
+            article.css('.page-header-icon, .page-header-icon-with-cover').each(&:remove)
+
+            # サブページ内のリンク（.link-to-page 等）内の 🪙 アイコンの削除
+            article.css('.link-to-page, a').each do |container|
+              container.css('.icon[data-emoji="🪙"]').remove
+              container.xpath('.//span[contains(@class, "icon") and text()="🪙"]').remove
             end
           end
 
@@ -801,7 +946,7 @@ module NotionToPdf
 
             clean_href = href.split('#').first
             unquoted = URI::DEFAULT_PARSER.unescape(clean_href)
-            abs_target = File.expand_path(File.join(page_dir, unquoted))
+            abs_target = File.expand_path(File.join(page_dir, unquoted)).unicode_normalize(:nfc)
 
             if path_to_id.key?(abs_target)
               a['href'] = "#page-#{path_to_id[abs_target]}"
@@ -821,6 +966,18 @@ module NotionToPdf
               classes = (p_node['class'] || '').split
               classes << 'link-to-page' unless classes.include?('link-to-page')
               p_node['class'] = classes.join(' ')
+            end
+          end
+
+          # 意図的な改ページマーカー（[改ページ], [pagebreak], ---pagebreak---, <pagebreak> 等）の変換
+          article.css('p, pre, div').each do |node|
+            text = node.text.strip
+            if text =~ /\A\s*(?:\[(?:pagebreak|改ページ|pb)\]|---+pagebreak---+|===+pagebreak===+|<pagebreak>)\s*\z/i
+              node.name = 'div'
+              node.inner_html = ''
+              node['class'] = 'force-page-break'
+              node.remove_attribute('id')
+              node.remove_attribute('style')
             end
           end
 
@@ -894,7 +1051,7 @@ module NotionToPdf
             end
           end
 
-          body_html = article.to_html
+          body_html = article.to_html(save_with: Nokogiri::XML::Node::SaveOptions::AS_HTML)
         else
           # Nokogiri がない場合の正規表現フォールバック
           body_html = if content =~ %r{(<article\b[^>]*>.*?</article>)}im
@@ -909,6 +1066,14 @@ module NotionToPdf
           if hide_cover
             body_html = body_html.gsub(%r{<img\b[^>]*class=["'][^"']*page-cover-image[^"']*["'][^>]*>}i, '')
             body_html = body_html.gsub(/\bpage-header-icon-with-cover\b/, '')
+          end
+
+          # サブページヘッダ画像が非表示設定の場合のみ、data-notion-page-icon およびアイコンを削除
+          if hide_cover
+            body_html = body_html.gsub(/\s*data-notion-page-icon=["'][^"']*["']/i, '')
+            body_html = body_html.gsub(%r{<div\b[^>]*class=["'][^"']*page-header-icon[^"']*["'][^>]*>.*?</div>}im, '')
+            body_html = body_html.gsub(%r{<span\b[^>]*class=["'][^"']*icon[^"']*["'][^>]*data-emoji=["']🪙["'][^>]*></span>}i, '')
+            body_html = body_html.gsub(%r{<span\b[^>]*class=["'][^"']*icon[^"']*["'][^>]*>🪙</span>}i, '')
           end
 
           if open_toggles
@@ -955,7 +1120,7 @@ module NotionToPdf
             else
               clean_url = raw_url.split('#').first
               unquoted = URI::DEFAULT_PARSER.unescape(clean_url)
-              abs_target = File.expand_path(File.join(page_dir, unquoted))
+              abs_target = File.expand_path(File.join(page_dir, unquoted)).unicode_normalize(:nfc)
               if path_to_id.key?(abs_target)
                 "#{prefix}#page-#{path_to_id[abs_target]}#{suffix}"
               elsif File.exist?(abs_target)
@@ -975,6 +1140,9 @@ module NotionToPdf
             clean_attrs = attrs.gsub(/\bclass=["'][^"']*["']/i, '')
             %(<figure class="link-to-page"#{clean_attrs}>#{link_content}</figure>)
           end
+
+          # 意図的な改ページマーカーの変換
+          body_html = body_html.gsub(%r{<(?:p|pre|div)\b[^>]*>\s*(?:<code>)?\s*(?:\[(?:pagebreak|改ページ|pb)\]|---+pagebreak---+|===+pagebreak===+|<pagebreak>)\s*(?:</code>)?\s*</(?:p|pre|div)>}i, '<div class="force-page-break"></div>')
 
           # コールアウト内のテキストと直下の画像をセット化・分割
           body_html = body_html.gsub(%r{(<aside\b([^>]*)class=["']([^"']*callout[^"']*)["']([^>]*)>)(.*?)(</aside>)}m) do
@@ -1017,12 +1185,36 @@ module NotionToPdf
                        .gsub(/(<\/[a-z0-9]+>)\s*\n\s*(<div\b)/i, '\1\2')
         end
 
+        # リスト要素（li, ul, ol）内部・前後の不要な改行を除去
+        body_html = body_html.gsub(%r{(<li\b[^>]*>)\s*\n\s*}i, '\1')
+                             .gsub(%r{\s*\n\s*(</li>)}i, '\1')
+                             .gsub(%r{(</(?:ul|ol)>)\s*\n\s*(<(?:ul|ol)\b)}i, '\1\2')
+
         container_classes = ['notion-page-container']
         container_classes << 'subpage' if is_subpage
         container_classes << 'no-cover' if hide_cover
 
         section_html = %(<div class="#{container_classes.join(' ')}" id="page-#{p[:id]}">#{body_html}</div>)
         merged_sections << section_html
+      end
+
+      # トップページの meta タグ（data-notion-page-icon 等）を保持
+      top_meta_tags = []
+      if (top_page = ordered_pages.first)
+        if HAVE_NOKOGIRI
+          top_doc = Nokogiri::HTML(top_page[:raw_content])
+          icon_meta = top_doc.at_css('meta[name="data-notion-page-icon"]')
+          top_meta_tags << icon_meta.to_html if icon_meta
+          fav_icon = top_doc.at_css('link[rel="icon"]')
+          top_meta_tags << fav_icon.to_html if fav_icon
+        else
+          if top_page[:raw_content] =~ /(<meta\b[^>]*name=["']data-notion-page-icon["'][^>]*>)/i
+            top_meta_tags << Regexp.last_match(1)
+          end
+          if top_page[:raw_content] =~ /(<link\b[^>]*rel=["']icon["'][^>]*>)/i
+            top_meta_tags << Regexp.last_match(1)
+          end
+        end
       end
 
       # マスターHTMLの生成
@@ -1032,6 +1224,7 @@ module NotionToPdf
         <head>
           <meta charset="utf-8">
           <title>#{ordered_pages.first[:title]}</title>
+          #{top_meta_tags.join("\n  ")}
           <style>
             #{import_css}
             #{clean_base_css}
@@ -1088,6 +1281,11 @@ if __FILE__ == $PROGRAM_NAME
     margin: true,
     open_toggles: true,
     show_subpage_covers: false,
+    header_footer: true,
+    header: true,
+    footer: true,
+    header_title: nil,
+    header_align: 'right',
     auto_open: false,
     chrome_path: nil,
     output_pdf: nil
@@ -1126,6 +1324,26 @@ if __FILE__ == $PROGRAM_NAME
 
     opts.on('--no-subpage-covers', 'サブページのヘッダ画像を非表示にする') do
       options[:show_subpage_covers] = false
+    end
+
+    opts.on('--no-header-footer', 'ヘッダー（ファイル名）およびフッター（ページ番号）を表示しない') do
+      options[:header_footer] = false
+    end
+
+    opts.on('--no-header', 'ヘッダー（ファイル名）を表示しない') do
+      options[:header] = false
+    end
+
+    opts.on('--no-footer', 'フッター（ページ番号）を表示しない') do
+      options[:footer] = false
+    end
+
+    opts.on('--header-text TEXT', 'ヘッダーに表示するファイル名・テキストを指定 (デフォルト: 出力PDFファイル名)') do |v|
+      options[:header_title] = v
+    end
+
+    opts.on('--header-left', 'ヘッダーのファイル名を左寄せで配置する (デフォルト: 右寄せ)') do
+      options[:header_align] = 'left'
     end
 
     opts.on('--keep-toggles-closed', 'トグルリストを自動展開せず閉じたままにする') do
@@ -1184,6 +1402,11 @@ if __FILE__ == $PROGRAM_NAME
       margin: options[:margin],
       open_toggles: options[:open_toggles],
       show_subpage_covers: options[:show_subpage_covers],
+      header_footer: options[:header_footer],
+      header: options[:header],
+      footer: options[:footer],
+      header_title: options[:header_title],
+      header_align: options[:header_align],
       chrome_path: options[:chrome_path],
       auto_open: options[:auto_open]
     )
